@@ -12,7 +12,7 @@ public struct KeychainAccess: Sendable {
         case systemError(OSStatus)
     }
     
-    let itemNamePrefix: String
+    private let itemNamePrefix: String
     
     // use something like "tools.xcode.translate_strings"
     // NOTE: do not add an extra dot a the end of the prefix, it will be added
@@ -20,7 +20,7 @@ public struct KeychainAccess: Sendable {
         self.itemNamePrefix = itemNamePrefix
     }
 
-    func accountString(_ key: String) -> String {
+    private func accountString(_ key: String) -> String {
         itemNamePrefix + "." + key
     }
     

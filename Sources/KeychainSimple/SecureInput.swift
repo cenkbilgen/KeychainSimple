@@ -20,7 +20,7 @@ based on BSD/Unix/macOS function readpassphrase
  to allow that, set to true
  */
 
-enum SecureInput {
+public enum SecureInput {
     
     public enum Error: Swift.Error {
         case secureInputFailed
