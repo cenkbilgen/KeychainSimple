@@ -72,7 +72,6 @@ public struct KeychainAccess: Sendable {
 
     public func read(id: String) async throws -> String {
         let account = accountString(id)
-        
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: account,
