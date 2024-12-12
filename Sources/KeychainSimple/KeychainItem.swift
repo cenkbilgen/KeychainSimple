@@ -1,8 +1,10 @@
 import Foundation
 import Security
+@preconcurrency import LocalAuthentication
 
 public struct KeychainAccess: Sendable {
 
+    // TODO: Have an LLM write some localizedDescriptions for these
     public enum Error: Swift.Error, Equatable {
         case notFound
         case notUTF8Encoded
@@ -10,12 +12,13 @@ public struct KeychainAccess: Sendable {
         case unexpectedItemData
         case securityError(CFError?)
         case systemError(OSStatus)
+        case invalidAuthenticationState
     }
     
     private let itemNamePrefix: String
     
     // use something like "tools.xcode.translate_strings"
-    // NOTE: do not add an extra dot a the end of the prefix, it will be added
+    // NOTE: do not include an extra dot a the end of the prefix, it will be added
     public init(itemNamePrefix: String) {
         self.itemNamePrefix = itemNamePrefix
     }
@@ -67,14 +70,16 @@ public struct KeychainAccess: Sendable {
         }
     }
 
-    public func read(id: String) throws -> String {
-        let query: [String: Any] = [
+    public func read(id: String) async throws -> String {
+        let account = accountString(id)
+        
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: accountString(id),
+            kSecAttrAccount as String: account,
             kSecReturnData as String: kCFBooleanTrue!,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-
+        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "To read the value for keychain item \(account)", query: &query)
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess else {
@@ -93,19 +98,20 @@ public struct KeychainAccess: Sendable {
         return string
     }
     
-    public func searchItems() throws -> [String] {
-        try KeychainAccess.searchItems(prefix: itemNamePrefix)
+    public func searchItems() async throws -> [String] {
+        try await KeychainAccess.searchItems(prefix: itemNamePrefix)
     }
     
     // For searching with any prefix
-    public static func searchItems(prefix: String) throws -> [String] {
-        let query: [String: Any] = [
+    public static func searchItems(prefix: String) async throws -> [String] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             // kSecAttrAccount as String: prefix + "*",
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnAttributes as String: kCFBooleanTrue!,
             kSecReturnData as String: kCFBooleanFalse!
         ]
+        try await updateQueryWithLocalAuthentication(reasonText: "To search for all keychain with id prefix \(prefix)", query: &query)
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess else {
@@ -128,6 +134,26 @@ public struct KeychainAccess: Sendable {
                 }
             }
     }
+    
+    // MARKING: Local Authentication
+    
+    static func updateQueryWithLocalAuthentication(reasonText: String, query: inout [String: Any]) async throws {
+        let context = LAContext()
+        var authError: NSError?
+        let canEvaluate = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &authError)
+        if canEvaluate {
+            let didSucceed = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reasonText)
+            if didSucceed {
+                query[kSecUseAuthenticationContext as String] = context
+            }
+        } else if let authError {
+            throw authError
+        } else {
+            throw Error.invalidAuthenticationState
+        }
+        
+    }
+
 }
 
 
