@@ -29,11 +29,13 @@ public enum SecureInput {
     public static func read(prompt: String,
                             echoInput: Bool = false,
                             onlyInteractiveInput: Bool = true,
+                            allowSTDIN: Bool = true,
                             allocationSize: Int = 512) throws -> String {
         var buffer: [Int8] = Array(repeating: 0, count: allocationSize)
         let echoMask = echoInput ? RPP_ECHO_ON : RPP_ECHO_OFF
         let ttyMask = onlyInteractiveInput ? RPP_REQUIRE_TTY : 0
-        let options = echoMask | ttyMask
+        let allowSTDINMask = allowSTDIN ? RPP_STDIN : 0
+        let options = echoMask | ttyMask | allowSTDINMask
         
         let result = readpassphrase(prompt.cString(using: .utf8),
                                     &buffer,
