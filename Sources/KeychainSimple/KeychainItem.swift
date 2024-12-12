@@ -28,11 +28,12 @@ public struct KeychainAccess: Sendable {
     }
     
     // will not throw if does not exist
-    public func delete(id: String) throws {
-        let query: [String: Any] = [
+    public func delete(id: String) async throws {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: accountString(id),
         ]
+        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "To delete key with id \(itemNamePrefix).\(id)", query: &query)
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess else {
             throw Error.systemError(status)
@@ -41,16 +42,16 @@ public struct KeychainAccess: Sendable {
 
     public func save(id: String,
                      value: String,
-                     updateExisting: Bool = true) throws {
+                     updateExisting: Bool = true) async throws {
         guard let data = value.data(using: .utf8) else {
             throw Error.notUTF8Encoded
         }
-        // let accessControl = try createAccessControl()
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: accountString(id),
             kSecValueData as String: data,
         ]
+        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "To save key with id \(itemNamePrefix).\(id)", query: &query)
         let status = SecItemAdd(query as CFDictionary, nil)
         switch status {
         case errSecSuccess:
@@ -127,7 +128,7 @@ public struct KeychainAccess: Sendable {
             .compactMap { item in
                 if let account = item[kSecAttrAccount as String] as? String,
                    account.hasPrefix(prefix) {
-                    return account.replacingOccurrences(of: prefix, with: "")
+                    return account.replacingOccurrences(of: prefix + ".", with: "")
                 } else {
                     return nil
                 }
