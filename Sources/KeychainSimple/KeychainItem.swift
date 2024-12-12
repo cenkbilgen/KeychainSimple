@@ -1,5 +1,6 @@
 import Foundation
 import Security
+@preconcurrency import LocalAuthentication
 
 public struct KeychainAccess: Sendable {
 
@@ -10,6 +11,7 @@ public struct KeychainAccess: Sendable {
         case unexpectedItemData
         case securityError(CFError?)
         case systemError(OSStatus)
+        case invalidAuthenticationState
     }
     
     private let itemNamePrefix: String
@@ -67,14 +69,14 @@ public struct KeychainAccess: Sendable {
         }
     }
 
-    public func read(id: String) throws -> String {
-        let query: [String: Any] = [
+    public func read(id: String) async throws -> String {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: accountString(id),
             kSecReturnData as String: kCFBooleanTrue!,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-
+        try await KeychainAccess.updateQueryWithLocalAuthentication(query: &query)
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess else {
@@ -93,19 +95,20 @@ public struct KeychainAccess: Sendable {
         return string
     }
     
-    public func searchItems() throws -> [String] {
-        try KeychainAccess.searchItems(prefix: itemNamePrefix)
+    public func searchItems() async throws -> [String] {
+        try await KeychainAccess.searchItems(prefix: itemNamePrefix)
     }
     
     // For searching with any prefix
-    public static func searchItems(prefix: String) throws -> [String] {
-        let query: [String: Any] = [
+    public static func searchItems(prefix: String) async throws -> [String] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             // kSecAttrAccount as String: prefix + "*",
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnAttributes as String: kCFBooleanTrue!,
             kSecReturnData as String: kCFBooleanFalse!
         ]
+        try await updateQueryWithLocalAuthentication(query: &query)
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess else {
@@ -128,6 +131,27 @@ public struct KeychainAccess: Sendable {
                 }
             }
     }
+    
+    // MARKING: Local Authentication
+    
+    static func updateQueryWithLocalAuthentication(query: inout [String: Any]) async throws {
+        let context = LAContext()
+        var authError: NSError?
+        
+        let canEvaluate = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &authError)
+        if canEvaluate {
+            let didSucceed = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Authenticate to access secure data")
+            if didSucceed {
+                query[kSecUseAuthenticationContext as String] = context
+            }
+        } else if let authError {
+            throw authError
+        } else {
+            throw Error.invalidAuthenticationState
+        }
+        
+    }
+
 }
 
 
