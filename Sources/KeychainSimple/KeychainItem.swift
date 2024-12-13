@@ -33,7 +33,7 @@ public struct KeychainAccess: Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: accountString(id),
         ]
-        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "To delete key with id \(itemNamePrefix).\(id)", query: &query)
+        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "delete key with id \(itemNamePrefix).\(id)", query: &query)
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess else {
             throw Error.systemError(status)
@@ -51,7 +51,7 @@ public struct KeychainAccess: Sendable {
             kSecAttrAccount as String: accountString(id),
             kSecValueData as String: data,
         ]
-        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "To save key with id \(itemNamePrefix).\(id)", query: &query)
+        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "save key with id \(itemNamePrefix).\(id)", query: &query)
         let status = SecItemAdd(query as CFDictionary, nil)
         switch status {
         case errSecSuccess:
@@ -79,7 +79,7 @@ public struct KeychainAccess: Sendable {
             kSecReturnData as String: kCFBooleanTrue!,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "To read the value for keychain item \(account)", query: &query)
+        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "read the value for keychain item \(account)", query: &query)
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess else {
@@ -111,7 +111,7 @@ public struct KeychainAccess: Sendable {
             kSecReturnAttributes as String: kCFBooleanTrue!,
             kSecReturnData as String: kCFBooleanFalse!
         ]
-        try await updateQueryWithLocalAuthentication(reasonText: "To search for all keychain with id prefix \(prefix)", query: &query)
+        try await updateQueryWithLocalAuthentication(reasonText: "search for all keychain with id prefix \(prefix)", query: &query)
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess else {
@@ -145,6 +145,10 @@ public struct KeychainAccess: Sendable {
             let didSucceed = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reasonText)
             if didSucceed {
                 query[kSecUseAuthenticationContext as String] = context
+            } else {
+                #if DEBUG
+                print("Evaluate policy did not succeed.")
+                #endif
             }
         } else if let authError {
             throw authError
