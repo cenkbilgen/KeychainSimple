@@ -13,6 +13,7 @@ public struct KeychainAccess: Sendable {
         case securityError(CFError?)
         case systemError(OSStatus)
         case invalidAuthenticationState
+        case noAuthenticationPolicyAvailable
     }
     
     private let itemNamePrefix: String
@@ -50,6 +51,7 @@ public struct KeychainAccess: Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: accountString(id),
             kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
         ]
         try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "save key with id \(itemNamePrefix).\(id)", query: &query)
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -137,25 +139,46 @@ public struct KeychainAccess: Sendable {
     
     // MARKING: Local Authentication
     
+    static let policyOrder: [LAPolicy] = if #available(macOS 15, *) {
+        [.deviceOwnerAuthenticationWithBiometrics,
+         .deviceOwnerAuthenticationWithCompanion,
+         .deviceOwnerAuthentication]
+    } else {
+        [.deviceOwnerAuthentication]
+    }
+    
     static func updateQueryWithLocalAuthentication(reasonText: String, query: inout [String: Any]) async throws {
         let context = LAContext()
-        var authError: NSError?
-        let canEvaluate = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &authError)
-        if canEvaluate {
-            let didSucceed = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reasonText)
+        do {
+            let policy = try highestAllowedPolicy(context: context)
+            let didSucceed = try await context.evaluatePolicy(policy, localizedReason: reasonText)
             if didSucceed {
                 query[kSecUseAuthenticationContext as String] = context
             } else {
                 #if DEBUG
                 print("Evaluate policy did not succeed.")
                 #endif
+                throw Error.invalidAuthenticationState
             }
-        } else if let authError {
-            throw authError
-        } else {
-            throw Error.invalidAuthenticationState
         }
-        
+    }
+    
+    static func highestAllowedPolicy(context: LAContext) throws -> LAPolicy {
+        for policy in policyOrder {
+            do {
+                var error: NSError?
+                context.canEvaluatePolicy(policy, error: &error)
+                if let error {
+                    throw error
+                }
+                return policy
+            } catch {
+                #if DEBUG
+                print("Policy \(policy) not available. \(error.localizedDescription)")
+                #endif
+            }
+        }
+        throw Error.noAuthenticationPolicyAvailable
     }
 
 }
