@@ -18,10 +18,17 @@ public struct KeychainAccess: Sendable {
     
     private let itemNamePrefix: String
     
+    public enum AuthLevel: Sendable {
+        case firstUnlock, firstUse, everyAccess
+    }
+    private var authLevel: AuthLevel
+    
     // use something like "tools.xcode.translate_strings"
     // NOTE: do not include an extra dot a the end of the prefix, it will be added
-    public init(itemNamePrefix: String) {
+    
+    public init(itemNamePrefix: String, authLevel: AuthLevel = .firstUnlock) {
         self.itemNamePrefix = itemNamePrefix
+        self.authLevel = authLevel
     }
 
     private func accountString(_ key: String) -> String {
@@ -34,7 +41,7 @@ public struct KeychainAccess: Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: accountString(id),
         ]
-        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "delete key with id \(itemNamePrefix).\(id)", query: &query)
+        try await updateQueryWithLocalAuthentication(reasonText: "delete key with id \(itemNamePrefix).\(id)", query: &query)
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess else {
             throw Error.systemError(status)
@@ -53,7 +60,7 @@ public struct KeychainAccess: Sendable {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
         ]
-        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "save key with id \(itemNamePrefix).\(id)", query: &query)
+        try await updateQueryWithLocalAuthentication(reasonText: "save key with id \(itemNamePrefix).\(id)", query: &query)
         let status = SecItemAdd(query as CFDictionary, nil)
         switch status {
         case errSecSuccess:
@@ -81,7 +88,7 @@ public struct KeychainAccess: Sendable {
             kSecReturnData as String: kCFBooleanTrue!,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        try await KeychainAccess.updateQueryWithLocalAuthentication(reasonText: "read the value for keychain item \(account)", query: &query)
+        try await updateQueryWithLocalAuthentication(reasonText: "read the value for keychain item \(account)", query: &query)
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess else {
@@ -106,14 +113,14 @@ public struct KeychainAccess: Sendable {
     
     // For searching with any prefix
     public static func searchItems(prefix: String) async throws -> [String] {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             // kSecAttrAccount as String: prefix + "*",
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnAttributes as String: kCFBooleanTrue!,
-            kSecReturnData as String: kCFBooleanFalse!
+            kSecReturnData as String: kCFBooleanFalse!,
         ]
-        try await updateQueryWithLocalAuthentication(reasonText: "search for all keychain with id prefix \(prefix)", query: &query)
+//        try await updateQueryWithLocalAuthentication(reasonText: "search for all keychain with id prefix \(prefix)", query: &query)
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess else {
@@ -139,47 +146,67 @@ public struct KeychainAccess: Sendable {
     
     // MARKING: Local Authentication
     
-    static let policyOrder: [LAPolicy] = if #available(macOS 15, *) {
-        [.deviceOwnerAuthenticationWithBiometrics,
-         .deviceOwnerAuthenticationWithCompanion,
-         .deviceOwnerAuthentication]
-    } else {
-        [.deviceOwnerAuthentication]
-    }
+//    static let policyOrder: [LAPolicy] = if #available(macOS 15, *) {
+//        [
+//            .
+//            .deviceOwnerAuthenticationWithBiometrics,
+//            .deviceOwnerAuthenticationWithCompanion,
+//            .deviceOwnerAuthentication
+//        ]
+//    } else {
+//        [.deviceOwnerAuthentication]
+//    }
     
-    static func updateQueryWithLocalAuthentication(reasonText: String, query: inout [String: Any]) async throws {
-        let context = LAContext()
-        do {
-            let policy = try highestAllowedPolicy(context: context)
-            let didSucceed = try await context.evaluatePolicy(policy, localizedReason: reasonText)
-            if didSucceed {
-                query[kSecUseAuthenticationContext as String] = context
-            } else {
-                #if DEBUG
-                print("Evaluate policy did not succeed.")
-                #endif
-                throw Error.invalidAuthenticationState
+    func updateQueryWithLocalAuthentication(reasonText: String, query: inout [String: Any]) async throws {
+        switch authLevel {
+        case .firstUnlock:
+            query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        case .firstUse:
+            var error: Unmanaged<CFError>?
+            guard let accessControl = SecAccessControlCreateWithFlags(
+                kCFAllocatorDefault,
+                kSecAttrAccessibleAfterFirstUnlock,
+                .userPresence,
+                &error) else {
+                print("Unable to create access control: \(String(describing: error))")
+                throw Error.securityError(error?.takeRetainedValue())
             }
-        }
-    }
-    
-    static func highestAllowedPolicy(context: LAContext) throws -> LAPolicy {
-        for policy in policyOrder {
+            query[kSecAttrAccessControl as String] = accessControl
+        case .everyAccess:
+            let context = LAContext()
+            context.interactionNotAllowed = false
             do {
-                var error: NSError?
-                context.canEvaluatePolicy(policy, error: &error)
-                if let error {
-                    throw error
+                let policy: LAPolicy = .deviceOwnerAuthentication
+                let didSucceed = try await context.evaluatePolicy(policy, localizedReason: reasonText)
+                if didSucceed {
+                    query[kSecUseAuthenticationContext as String] = context
+                } else {
+#if DEBUG
+                    print("Evaluate policy did not succeed.")
+#endif
+                    throw Error.invalidAuthenticationState
                 }
-                return policy
-            } catch {
-                #if DEBUG
-                print("Policy \(policy) not available. \(error.localizedDescription)")
-                #endif
             }
         }
-        throw Error.noAuthenticationPolicyAvailable
     }
+    
+//    static func highestAllowedPolicy(context: LAContext) throws -> LAPolicy {
+//        for policy in policyOrder {
+//            do {
+//                var error: NSError?
+//                context.canEvaluatePolicy(policy, error: &error)
+//                if let error {
+//                    throw error
+//                }
+//                return policy
+//            } catch {
+//                #if DEBUG
+//                print("Policy \(policy) not available. \(error.localizedDescription)")
+//                #endif
+//            }
+//        }
+//        throw Error.noAuthenticationPolicyAvailable
+//    }
 
 }
 
